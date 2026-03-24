@@ -5,7 +5,7 @@
  */
 type Suffix = "b" | "w" | "l" | "q";
 
-export const MEMORY_ADDRESS_SIZE = 4;
+export const MEMORY_ADDRESS_SIZE = 8;
 
 const BlockSizes = {
   b: 1,
@@ -41,7 +41,10 @@ function pushToStack(
 
   return {
     ...state,
-    sp: state.sp + entry.size,
+    registers: {
+      ...state.registers,
+      rsp: state.registers.rsp + entry.size,
+    },
     stack: [...state.stack, newEntry],
   };
 }
@@ -51,7 +54,13 @@ function popFromStack(state: Readonly<State>): State {
 
   const stack = state.stack.slice(0, -1);
 
-  return { ...state, sp: state.sp - (lastElement?.size || 0), stack };
+  const newRsp = state.registers.rsp - (lastElement?.size || 0);
+
+  return {
+    ...state,
+    registers: { ...state.registers, rsp: newRsp },
+    stack,
+  };
 }
 
 function createStack(): Stack {
@@ -63,9 +72,7 @@ export function stackEntry(overrides: Readonly<Partial<StackEntry>> = {}) {
 }
 
 interface State {
-  sp: number;
-  bp: number;
-  ip: number;
+  registers: Record<string, number>;
   stack: Stack;
 }
 
@@ -79,10 +86,12 @@ function assertSuffix(suffix: string): asserts suffix is Suffix {
 
 export function initialState(overrides: Partial<State> = {}) {
   let state = {
-    bp: 0,
-    ip: 0,
+    registers: {
+      rbp: 0,
+      rip: 0,
+      rsp: 0,
+    },
     ...overrides,
-    sp: 0,
     stack: createStack(),
   };
 
@@ -92,22 +101,34 @@ export function initialState(overrides: Partial<State> = {}) {
     }
   }
 
+  state.registers.rsp = stackOffset(state.stack);
+
   return state;
 }
 
+function updateRegister<T extends State>(
+  state: Readonly<T>,
+  register: Readonly<keyof State["registers"]>,
+  value: Readonly<number>,
+) {
+  return { ...state, registers: { ...state.registers, [register]: value } };
+}
+
 export function execute(state: Readonly<State>, instruction: string) {
-  const [operation, operands] = instruction.split(" ");
+  const [operation, ...operands] = instruction.split(" ");
 
   if (operation === "call") {
-    const instructionAddress = parseInt(operands);
+    const regex = new RegExp(/\*\%[a-z]+/);
+    const offset = state.registers.rip + (regex.test(operands[0]) ? 2 : 5);
 
-    return {
-      ...pushToStack(state, {
-        value: instructionAddress,
+    return updateRegister(
+      pushToStack(state, {
+        value: offset,
         size: MEMORY_ADDRESS_SIZE,
       }),
-      ip: instructionAddress,
-    };
+      "rip",
+      offset,
+    );
   }
 
   if (operation.startsWith("push")) {
@@ -125,7 +146,11 @@ export function execute(state: Readonly<State>, instruction: string) {
   }
 
   if (operation === "ret") {
-    return { ...state, sp: -MEMORY_ADDRESS_SIZE };
+    return updateRegister(
+      updateRegister(state, "rip", state.registers.rip + 1),
+      "rsp",
+      state.registers.rsp - MEMORY_ADDRESS_SIZE,
+    );
   }
 
   return state;
