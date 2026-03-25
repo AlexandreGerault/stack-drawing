@@ -32,9 +32,9 @@ export function pushToStack(state: Readonly<State>, entry: StackEntry): State {
   );
 }
 
-function popFromStack<T extends State>(
-  state: Readonly<T>,
-  register: Readonly<keyof T["registers"]>,
+function popFromStack(
+  state: Readonly<State>,
+  register: Readonly<keyof State["registers"]>,
 ): State {
   const lastElement = state.stack[state.stack.length - 1];
 
@@ -89,11 +89,11 @@ export function initialState(overrides: Partial<State> = {}) {
   return state;
 }
 
-function updateRegister<T extends State>(
-  state: Readonly<T>,
-  register: Readonly<keyof T["registers"]>,
+function updateRegister(
+  state: Readonly<State>,
+  register: Readonly<keyof State["registers"]>,
   value: Readonly<number>,
-): Readonly<T> {
+): Readonly<State> {
   return { ...state, registers: { ...state.registers, [register]: value } };
 }
 
