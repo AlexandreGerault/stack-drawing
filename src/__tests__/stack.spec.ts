@@ -6,7 +6,9 @@ import {
   stackOffset,
   nextStackAddress,
   MEMORY_ADDRESS_SIZE,
+  readRegister,
 } from "~/core/stack";
+import { stateBuilder } from "./state.builder";
 
 const emptyState = initialState();
 
@@ -15,7 +17,7 @@ const emptyState = initialState();
  * - direct calls
  * - indirect calls
  *
- * Direct call example: Call a procedure to a given address (relative)
+ * Direct call example: Call a procedure to a given address
  *     118c:	e8 ef fe ff ff       	call   1080 <__x86.get_pc_thunk.bx>
  *     1191:	81 c3 63 2e 00 00    	add    $0x2e63,%ebx
  *
@@ -30,20 +32,17 @@ describe("Instruction: call", () => {
     test("Example: call 00FF increments the instruction pointer by 5", () => {
       const newState = execute(emptyState, "call 00FF");
 
-      expect(newState.registers.rip).toEqual(0x5);
+      expect(readRegister(newState, "rip")).toEqual(0x5);
     });
 
     test("Example: call *%eax increments the instruction pointer by 2", () => {
       const newState = execute(emptyState, "call *%eax");
 
-      expect(newState.registers.rip).toEqual(0x2);
+      expect(readRegister(newState, "rip")).toEqual(0x2);
     });
   });
 
   describe("pushes return address to stack", () => {
-    /**
-     * Empty state => IP = 0
-     */
     test("call 00FF pushes return address 5", () => {
       const newState = execute(emptyState, "call 00FF");
 
@@ -73,17 +72,26 @@ describe("Instruction: call", () => {
     test("call 00FF updates SP", () => {
       const newState = execute(emptyState, "call 00FF");
 
-      expect(newState.registers.rsp).toEqual(MEMORY_ADDRESS_SIZE);
+      expect(readRegister(newState, "rsp")).toEqual(MEMORY_ADDRESS_SIZE);
     });
   });
 });
 
+/**
+ * This instruction allows to exit a procedure and get back to the
+ * previous execution context.
+ *
+ * Example from disassembled code:
+ *     1158:	c3                   	ret
+ *
+ * We can see that the instruction size here is only 1 byte.
+ */
 describe("Instruction: ret", () => {
   describe("sets instruction pointer", () => {
     test("Example: ret increments the instruction pointer by 1", () => {
       const newState = execute(emptyState, "ret");
 
-      expect(newState.registers.rip).toEqual(0x1);
+      expect(readRegister(newState, "rip")).toEqual(0x1);
     });
   });
 
@@ -98,107 +106,41 @@ describe("Instruction: ret", () => {
 
       const newState = execute(state, "ret");
 
-      expect(newState.registers.rsp).toEqual(0);
+      expect(readRegister(newState, "rsp")).toEqual(0);
     });
   });
 });
 
-describe("Instruction: pushb (byte push)", () => {
+/**
+ * This instruction pushes the base pointer register value onto the stack.
+ *
+ * Examples from disassembled code:
+ *     1020:	ff 35 ca 2f 00 00    	push   0x2fca(%rip)
+ *     104d:	50                   	push   %rax
+ *     104e:	54                   	push   %rsp
+ *     10ed:	55                   	push   %rbp
+ *
+ * We distinguish that there are two cases:
+ * - pushing a register values
+ * - pushing a value from memory
+ *
+ * Instruction size from registers rax, rsp and rbp are 1 byte (just an
+ * opcode).
+ *
+ * Instruction to push a value from memory is not supported yet.
+ */
+describe("Instruction: push", () => {
   describe("stores value on stack", () => {
-    test("pushb %eax stores stack entry with size 1", () => {
-      const newState = execute(emptyState, "pushb %eax");
+    test("push %rax stores stack entry", () => {
+      const state = stateBuilder(emptyState)
+        .withRegisterValue("rax", 0x274234bdcdefae4e)
+        .build();
+
+      const newState = execute(state, "pushb %rax");
 
       expect(newState.stack).toContainEqual(
         stackEntry({
-          value: 0x0,
-          size: 1,
-        }),
-      );
-    });
-  });
-
-  describe("updates stack pointer", () => {
-    test("pushb %eax updates SP to 0x04", () => {
-      const newState = execute(emptyState, "pushb %eax");
-
-      expect(newState.registers.rsp).toEqual(0x01);
-    });
-  });
-
-  describe("tracks stack offset", () => {
-    test("pushb followed by pushw sets stack offset to 0x3", () => {
-      const stateA = execute(emptyState, "pushb %eax");
-      const stateB = execute(stateA, "pushw %eax");
-
-      expect(stackOffset(stateB.stack)).toEqual(0x3);
-    });
-  });
-});
-
-describe("Instruction: pushw (word push)", () => {
-  describe("stores value on stack", () => {
-    test("pushw %aex stores stack entry with size 2", () => {
-      const newState = execute(emptyState, "pushw %aex");
-
-      expect(newState.stack).toContainEqual(
-        stackEntry({
-          value: 0x0,
-          size: 2,
-        }),
-      );
-    });
-  });
-
-  describe("updates stack pointer", () => {
-    test("pushw %aex updates SP to 0x04", () => {
-      const newState = execute(emptyState, "pushw %aex");
-
-      expect(newState.registers.rsp).toEqual(0x02);
-    });
-  });
-
-  describe("tracks stack offset", () => {
-    test("pushb then pushw then pushl sets stack offset to 0x7", () => {
-      const stateA = execute(emptyState, "pushb %ebp");
-      const stateB = execute(stateA, "pushw %ebp");
-      const stateC = execute(stateB, "pushl %ebp");
-
-      expect(stackOffset(stateC.stack)).toEqual(0x7);
-    });
-  });
-});
-
-describe("Instruction: pushl (long push)", () => {
-  describe("stores value on stack", () => {
-    test("pushl %ebp stores stack entry with size 4", () => {
-      const newState = execute(emptyState, "pushl %ebp");
-
-      expect(newState.stack).toContainEqual(
-        stackEntry({
-          value: 0x0,
-          size: 4,
-        }),
-      );
-    });
-  });
-
-  describe("updates stack pointer", () => {
-    test("pushl %ebp updates SP to 0x04", () => {
-      const newState = execute(emptyState, "pushl %ebp");
-
-      expect(newState.registers.rsp).toEqual(0x04);
-    });
-  });
-});
-
-describe("Instruction: pushq (quad push)", () => {
-  describe("stores value on stack", () => {
-    test("pushq %ebp stores stack entry with size 8", () => {
-      const newState = execute(emptyState, "pushq %ebp");
-
-      expect(newState.stack).toContainEqual(
-        stackEntry({
-          value: 0x0,
+          value: 0x274234bdcdefae4e,
           size: 8,
         }),
       );
@@ -206,224 +148,118 @@ describe("Instruction: pushq (quad push)", () => {
   });
 
   describe("updates stack pointer", () => {
-    test("pushq %ebp updates SP to 0x04", () => {
-      const newState = execute(emptyState, "pushq %ebp");
+    test("push %rax updates SP to 0x08", () => {
+      const state = stateBuilder(emptyState)
+        .withRegisterValue("rax", 0xaefdda4eca8dc455)
+        .build();
 
-      expect(newState.registers.rsp).toEqual(0x08);
+      const newState = execute(state, "pushb %rax");
+
+      expect(readRegister(newState, "rsp")).toEqual(0x08);
     });
   });
 
   describe("tracks stack offset", () => {
-    test("pushb then pushw then pushl then pushq sets stack offset to 0xf", () => {
-      const stateA = execute(emptyState, "pushb %ebp");
-      const stateB = execute(stateA, "pushw %ebp");
-      const stateC = execute(stateB, "pushl %ebp");
-      const stateD = execute(stateC, "pushq %ebp");
+    test("push followed by push sets stack offset to 0xF1", () => {
+      const state = stateBuilder(emptyState)
+        .withRegisterValue("rax", 0xaefdda4eca8dc455)
+        .build();
 
-      expect(stackOffset(stateD.stack)).toEqual(0xf);
+      const stateA = execute(state, "push %rax");
+      const stateB = execute(stateA, "push %rax");
+
+      expect(stackOffset(stateB.stack)).toEqual(0x10);
     });
   });
 });
 
-describe("Instruction: popb (byte pop)", () => {
+/**
+ * This instruction pops a value from the stack
+ *
+ * Examples from disassembled code:
+ *     1045:	5e                   	pop    %rsi
+ *     1113:	5d                   	pop    %rbp
+ *     1143:	5d                   	pop    %rbp
+ *
+ * We can see that there are two opcodes without operands.
+ * It seems the opcode defines a pop for a given register.
+ */
+describe("Instruction: pop", () => {
   describe("removes entry from stack", () => {
-    test("popb removes single byte entry from stack", () => {
-      const entry = stackEntry({ size: 1 });
-      const state = initialState({ stack: [entry] });
+    test("pop removes entry from stack", () => {
+      const state = stateBuilder(emptyState)
+        .withStackEntry({ value: 0x1234567890abcdef, size: 8 })
+        .build();
 
-      const newState = execute(state, "popb");
+      const newState = execute(state, "pop %rax");
 
-      expect(newState.stack).not.toContainEqual(entry);
+      expect(newState.stack).not.toContainEqual({
+        value: 0x1234567890abcdef,
+        size: 8,
+      });
     });
 
-    test("popb removes top entry while keeping bottom entries", () => {
-      const toKeep = stackEntry({ size: 1 });
-      const toPop = stackEntry({ size: 2 });
-      const state = initialState({ stack: [toKeep, toPop] });
+    test("pop removes top entry while keeping bottom entries", () => {
+      const state = stateBuilder(emptyState)
+        .withStackEntry({ value: 0x1234567890abcdef, size: 8 })
+        .withStackEntry({ value: 0x325463face321c1f, size: 8 })
+        .build();
 
-      const newState = execute(state, "popw");
+      const newState = execute(state, "pop %rax");
 
-      expect(newState.stack).not.toContainEqual(toPop);
-      expect(newState.stack).toContainEqual(toKeep);
+      expect(newState.stack).not.toContainEqual({
+        value: 0x325463face321c1f,
+        size: 8,
+      });
+      expect(newState.stack).toContainEqual({
+        value: 0x1234567890abcdef,
+        size: 8,
+      });
     });
   });
 
   describe("resets stack offset", () => {
-    test("popb on single-entry stack sets stack offset to 0", () => {
-      const entry = stackEntry({ size: 1 });
-      const state = initialState({ stack: [entry] });
+    test("pop on single-entry stack sets stack offset to 0", () => {
+      const state = stateBuilder(emptyState)
+        .withStackEntry({ value: 0x1234567890abcdef, size: 8 })
+        .build();
 
-      const newState = execute(state, "popb");
+      const newState = execute(state, "pop %rax");
 
       expect(stackOffset(newState.stack)).toEqual(0);
     });
 
-    test("popb on single-entry stack sets next stack address to 0", () => {
-      const entry = stackEntry({ size: 1 });
-      const state = initialState({ stack: [entry] });
+    test("pop on single-entry stack sets next stack address to 0", () => {
+      const state = stateBuilder(emptyState)
+        .withStackEntry({ value: 0x1234567890abcdef, size: 8 })
+        .build();
 
-      const newState = execute(state, "popb");
+      const newState = execute(state, "pop %rax");
 
       expect(nextStackAddress(newState.stack)).toEqual(0);
     });
   });
 
   describe("maintains stack offset with multiple entries", () => {
-    test("popw with two-entry stack updates stack offset to 1", () => {
-      const toKeep = stackEntry({ size: 1 });
-      const toPop = stackEntry({ size: 2 });
-      const state = initialState({ stack: [toKeep, toPop] });
+    test("pop with two-entry stack updates stack offset to 8", () => {
+      const state = stateBuilder(emptyState)
+        .withStackEntry({ value: 0x1234567890abcdef, size: 8 })
+        .withStackEntry({ value: 0x325463face321c1f, size: 8 })
+        .build();
 
-      const newState = execute(state, "popw");
+      const newState = execute(state, "pop %rax");
 
-      expect(stackOffset(newState.stack)).toEqual(1);
-    });
-
-    test("popw with two-entry stack updates next address to 2", () => {
-      const toKeep = stackEntry({ size: 1 });
-      const toPop = stackEntry({ size: 2 });
-      const state = initialState({ stack: [toKeep, toPop] });
-
-      const newState = execute(state, "popw");
-
-      expect(nextStackAddress(newState.stack)).toEqual(2);
-    });
-  });
-});
-
-describe("Instruction: popw (word pop)", () => {
-  describe("removes entry from stack", () => {
-    test("popw removes single word entry from stack", () => {
-      const entry = stackEntry({ size: 2 });
-      const state = initialState({ stack: [entry] });
-
-      const newState = execute(state, "popw");
-
-      expect(newState.stack).not.toContainEqual(entry);
+      expect(stackOffset(newState.stack)).toEqual(8);
     });
   });
 
-  describe("resets stack offset", () => {
-    test("popw on single-entry stack sets stack offset to 0", () => {
-      const entry = stackEntry({ size: 2 });
-      const state = initialState({ stack: [entry] });
+  describe("pop stores the popped value in the register", () => {
+    const state = stateBuilder(emptyState)
+      .withStackEntry({ value: 0x1234567890abcdef, size: 8 })
+      .build();
 
-      const newState = execute(state, "popw");
+    const newState = execute(state, "pop %rax");
 
-      expect(stackOffset(newState.stack)).toEqual(0);
-    });
-
-    test("popw on single-entry stack sets next stack address to 0", () => {
-      const entry = stackEntry({ size: 2 });
-      const state = initialState({ stack: [entry] });
-
-      const newState = execute(state, "popw");
-
-      expect(nextStackAddress(newState.stack)).toEqual(0);
-    });
-  });
-});
-
-describe("Instruction: popl (long pop)", () => {
-  describe("removes entry from stack", () => {
-    test("popl removes single long entry from stack", () => {
-      const entry = stackEntry({ size: 4 });
-      const state = initialState({ stack: [entry] });
-
-      const newState = execute(state, "popl %ebp");
-
-      expect(newState.stack).not.toContainEqual(entry);
-    });
-  });
-
-  describe("resets stack offset", () => {
-    test("popl on single-entry stack sets stack offset to 0", () => {
-      const entry = stackEntry({ size: 4 });
-      const state = initialState({ stack: [entry] });
-
-      const newState = execute(state, "popl %ebp");
-
-      expect(stackOffset(newState.stack)).toEqual(0);
-    });
-
-    test("popl on single-entry stack updates SP to 0x0", () => {
-      const state = initialState({ stack: [stackEntry({ size: 4 })] });
-
-      const newState = execute(state, "popl %ebp");
-
-      expect(newState.registers.rsp).toEqual(0x0);
-    });
-  });
-
-  describe("maintains stack offset with multiple entries", () => {
-    test("popl on eight-entry stack sets stack offset to 7", () => {
-      const state = initialState({
-        stack: [
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-        ],
-      });
-
-      const newState = execute(state, "popb");
-
-      expect(stackOffset(newState.stack)).toEqual(7);
-    });
-
-    test("popl on eight-entry stack sets next address to 8", () => {
-      const state = initialState({
-        stack: [
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-          stackEntry(),
-        ],
-      });
-
-      const newState = execute(state, "popb");
-
-      expect(nextStackAddress(newState.stack)).toEqual(8);
-    });
-  });
-});
-
-describe("Instruction: popq (quad pop)", () => {
-  describe("removes entry from stack", () => {
-    test("popq removes single quad entry from stack", () => {
-      const entry = stackEntry({ size: 8 });
-      const state = initialState({ stack: [entry] });
-
-      const newState = execute(state, "popq %ebp");
-
-      expect(newState.stack).not.toContainEqual(entry);
-    });
-  });
-
-  describe("resets stack offset", () => {
-    test("popq on single-entry stack sets stack offset to 0", () => {
-      const entry = stackEntry({ size: 8 });
-      const state = initialState({ stack: [entry] });
-
-      const newState = execute(state, "popq %ebp");
-
-      expect(stackOffset(newState.stack)).toEqual(0);
-    });
-
-    test("popq on single-entry stack updates SP to 0", () => {
-      const state = initialState({ stack: [stackEntry({ size: 8 })] });
-
-      const newState = execute(state, "popq %ebp");
-
-      expect(newState.registers.rsp).toEqual(0);
-    });
+    expect(readRegister(newState, "rax")).toEqual(0x1234567890abcdef);
   });
 });

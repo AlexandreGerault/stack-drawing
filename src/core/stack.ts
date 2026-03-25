@@ -1,20 +1,6 @@
-/**
- * In the context of this application we'll suppose the following
- * mapping considering 8086 intel processors.
- * This might not be true so this can be updated carrefully if documented.
- */
-type Suffix = "b" | "w" | "l" | "q";
-
 export const MEMORY_ADDRESS_SIZE = 8;
 
-const BlockSizes = {
-  b: 1,
-  w: 2,
-  l: 4,
-  q: 8,
-} satisfies Record<Suffix, number>;
-
-type StackEntry = {
+export type StackEntry = {
   value: number;
   size: number;
 };
@@ -33,34 +19,39 @@ export function nextStackAddress(stack: Readonly<Stack>) {
   return stackOffset(stack) + stack[stack.length - 1].size;
 }
 
-function pushToStack(
-  state: Readonly<State>,
-  entry: Pick<StackEntry, "value" | "size">,
-): State {
+export function pushToStack(state: Readonly<State>, entry: StackEntry): State {
   const newEntry = { ...entry };
 
-  return {
-    ...state,
-    registers: {
-      ...state.registers,
-      rsp: state.registers.rsp + entry.size,
+  return updateRegister(
+    {
+      ...state,
+      stack: [...state.stack, newEntry],
     },
-    stack: [...state.stack, newEntry],
-  };
+    "rsp",
+    state.registers.rsp + entry.size,
+  );
 }
 
-function popFromStack(state: Readonly<State>): State {
+function popFromStack<T extends State>(
+  state: Readonly<T>,
+  register: Readonly<keyof T["registers"]>,
+): State {
   const lastElement = state.stack[state.stack.length - 1];
 
   const stack = state.stack.slice(0, -1);
 
-  const newRsp = state.registers.rsp - (lastElement?.size || 0);
+  const updatedRsp = readRegister(state, "rsp") - (lastElement?.size || 0); //?
 
-  return {
-    ...state,
-    registers: { ...state.registers, rsp: newRsp },
-    stack,
-  };
+  const updateRspState = updateRegister(
+    {
+      ...state,
+      stack,
+    },
+    "rsp",
+    updatedRsp,
+  );
+
+  return updateRegister(updateRspState, register, lastElement.value);
 }
 
 function createStack(): Stack {
@@ -71,17 +62,9 @@ export function stackEntry(overrides: Readonly<Partial<StackEntry>> = {}) {
   return { value: 0, size: 1, ...overrides } satisfies StackEntry;
 }
 
-interface State {
+export interface State {
   registers: Record<string, number>;
   stack: Stack;
-}
-
-function assertSuffix(suffix: string): asserts suffix is Suffix {
-  if (!["b", "w", "l", "q"].includes(suffix)) {
-    throw new Error(
-      `Invalid instruction suffix: ${suffix} is not in ["b", "w", "l", "q"]`,
-    );
-  }
 }
 
 export function initialState(overrides: Partial<State> = {}) {
@@ -108,10 +91,21 @@ export function initialState(overrides: Partial<State> = {}) {
 
 function updateRegister<T extends State>(
   state: Readonly<T>,
-  register: Readonly<keyof State["registers"]>,
+  register: Readonly<keyof T["registers"]>,
   value: Readonly<number>,
-) {
+): Readonly<T> {
   return { ...state, registers: { ...state.registers, [register]: value } };
+}
+
+function extractRegisterNameFromOperand(operand: string): string {
+  return operand.split("%")[1];
+}
+
+export function readRegister<T extends State>(
+  state: Readonly<T>,
+  register: Readonly<keyof T["registers"]>,
+) {
+  return state.registers[register];
 }
 
 export function execute(state: Readonly<State>, instruction: string) {
@@ -119,7 +113,8 @@ export function execute(state: Readonly<State>, instruction: string) {
 
   if (operation === "call") {
     const regex = new RegExp(/\*\%[a-z]+/);
-    const offset = state.registers.rip + (regex.test(operands[0]) ? 2 : 5);
+    const offset =
+      readRegister(state, "rip") + (regex.test(operands[0]) ? 2 : 5);
 
     return updateRegister(
       pushToStack(state, {
@@ -132,24 +127,23 @@ export function execute(state: Readonly<State>, instruction: string) {
   }
 
   if (operation.startsWith("push")) {
-    const suffix = operation.slice(-1);
+    const register = extractRegisterNameFromOperand(operands[0]);
+    const value = readRegister(state, register);
 
-    assertSuffix(suffix);
-
-    const blockSize = BlockSizes[suffix];
-
-    return pushToStack(state, { value: 0, size: blockSize });
+    return pushToStack(state, { value: value, size: 8 });
   }
 
   if (instruction.startsWith("pop")) {
-    return popFromStack(state);
+    const register = extractRegisterNameFromOperand(operands[0]);
+
+    return popFromStack(state, register);
   }
 
   if (operation === "ret") {
     return updateRegister(
       updateRegister(state, "rip", state.registers.rip + 1),
       "rsp",
-      state.registers.rsp - MEMORY_ADDRESS_SIZE,
+      readRegister(state, "rsp") - MEMORY_ADDRESS_SIZE,
     );
   }
 
