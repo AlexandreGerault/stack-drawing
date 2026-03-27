@@ -183,6 +183,7 @@ describe("Instruction: push", () => {
  *
  * We can see that there are two opcodes without operands.
  * It seems the opcode defines a pop for a given register.
+ * The register is the destination of the popped value.
  */
 describe("Instruction: pop", () => {
   describe("removes entry from stack", () => {
